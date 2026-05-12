@@ -1,132 +1,111 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 from datetime import datetime
+from supabase import create_client, Client
+import io
 
 # ==========================================
-# 1. CONFIGURATION ET BASE DE DONNÉES
+# 1. CONFIGURATION CLOUD (SUPABASE)
 # ==========================================
-DB_NAME = "gmao_signalisation.db"
+# Vous devrez créer un compte gratuit sur supabase.com et mettre vos clés ici
+# (En production, ces clés se mettent dans les "Secrets" de Streamlit)
+SUPABASE_URL = "votre_url_supabase_ici"
+SUPABASE_KEY = "votre_cle_api_supabase_ici"
 
-def init_db():
-    """Initialise la base de données SQLite selon le CDC"""
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS interventions (
-            id_intervention TEXT PRIMARY KEY,
-            date_heure TEXT,
-            article_nom TEXT,
-            localisation TEXT,
-            type_maint TEXT,
-            mesure_securite TEXT,
-            description TEXT,
-            etat_final TEXT
-            -- Note: Pour un prototype simple, nous ne stockons pas les BLOB des images, 
-            -- mais on pourrait stocker leurs chemins d'accès locaux.
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-def generate_id():
-    """Génère un ID unique basé sur la date et l'heure"""
-    return f"TKT-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+# Initialisation de la connexion (désactivée le temps que vous mettiez vos clés)
+# supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ==========================================
-# 2. INTERFACE UTILISATEUR (STREAMLIT)
+# 2. SYSTÈME DE CONNEXION (LOGIN)
 # ==========================================
-st.set_page_config(page_title="GMAO Signalisation", page_icon="🚦", layout="centered")
+st.set_page_config(page_title="GMAO SLT - Cloud", page_icon="🚦", layout="centered")
 
-init_db()
+if 'utilisateur' not in st.session_state:
+    st.session_state.utilisateur = None
+    st.session_state.role = None
 
-# Barre de navigation latérale
-st.sidebar.title("🚦 GMAO SLT")
-menu = st.sidebar.radio("Navigation", ["Nouvelle Intervention", "Tableau de Bord / Historique"])
-
-# --- ONGLET 1 : MODULE DE MAINTENANCE (Saisie) ---
-if menu == "Nouvelle Intervention":
-    st.header("🛠️ Saisie d'une Intervention")
+# Écran de connexion
+if st.session_state.utilisateur is None:
+    st.title("🔐 Connexion GMAO SLT")
+    utilisateur = st.selectbox("Qui êtes-vous ?", ["Technicien 1 (Ali)", "Technicien 2 (Omar)", "Technicien 3 (Said)", "Superviseur (Vous)"])
+    mot_de_passe = st.text_input("Mot de passe", type="password")
     
-    # ID généré automatiquement
-    ticket_id = generate_id()
-    st.info(f"**ID d'intervention :** {ticket_id}")
+    if st.button("Se connecter"):
+        # Mots de passe basiques pour l'exemple
+        if "Technicien" in utilisateur and mot_de_passe == "tech123":
+            st.session_state.utilisateur = utilisateur
+            st.session_state.role = "Technicien"
+            st.rerun()
+        elif "Superviseur" in utilisateur and mot_de_passe == "admin123":
+            st.session_state.utilisateur = utilisateur
+            st.session_state.role = "Superviseur"
+            st.rerun()
+        else:
+            st.error("Mot de passe incorrect.")
+    st.stop() # Arrête le code ici si non connecté
+
+# ==========================================
+# 3. APPLICATION PRINCIPALE
+# ==========================================
+st.sidebar.success(f"👤 Connecté en tant que : {st.session_state.utilisateur}")
+if st.sidebar.button("Déconnexion"):
+    st.session_state.utilisateur = None
+    st.session_state.role = None
+    st.rerun()
+
+# --- VUE TECHNICIEN : SAISIE ---
+if st.session_state.role == "Technicien":
+    st.header("🛠️ Nouvelle Intervention")
     
-    with st.form("form_intervention", clear_on_submit=True):
-        st.subheader("A. Fiche d'identité de l'équipement")
-        col1, col2 = st.columns(2)
-        with col1:
-            article = st.selectbox("Type d'article", 
-                                   ["Armoire de commande", "Feu de signalisation", "Câblage", "Capteur", "Poste HTA"])
-        with col2:
-            localisation = st.text_input("Localisation (ex: Carrefour X, Coordonnées GPS)")
-            
-        st.subheader("B. Détails de la Maintenance")
-        type_maint = st.radio("Type de Maintenance", ["Préventive", "Corrective", "Curative"], horizontal=True)
+    with st.form("form_tech"):
+        article = st.selectbox("Équipement", ["Armoire", "Feu de signalisation", "Câblage"])
+        localisation = st.text_input("Localisation (Carrefour)")
+        type_maint = st.radio("Type", ["Préventive", "Corrective"])
         
-        # Champ de sécurité spécifique à l'électricité
-        securite = st.radio("⚠️ Mesure de sécurité : Consignation électrique effectuée ?", ["OUI", "NON", "Non Applicable"], horizontal=True)
+        st.write("📸 Preuves Visuelles")
+        photo = st.camera_input("Prendre une photo (Obligatoire)")
         
-        st.write("📸 **Documentation Visuelle**")
-        col_img1, col_img2 = st.columns(2)
-        with col_img1:
-            photo_avant = st.file_uploader("Photo AVANT (Obligatoire)", type=["jpg", "png", "jpeg"])
-        with col_img2:
-            photo_apres = st.file_uploader("Photo APRÈS", type=["jpg", "png", "jpeg"])
-            
-        description = st.text_area("Description de l'action menée", placeholder="Ex: Remplacement du relais thermique, Serrage des borniers...")
-        etat_final = st.selectbox("État Final de l'équipement", ["Fonctionnel", "À surveiller", "Hors service"])
+        description = st.text_area("Travaux réalisés")
+        etat = st.selectbox("État Final", ["Fonctionnel", "À surveiller", "Hors service"])
         
-        # Bouton de soumission
-        submitted = st.form_submit_button("Enregistrer l'intervention")
-        
-        if submitted:
-            if not localisation:
-                st.error("Veuillez renseigner la localisation.")
-            elif not photo_avant:
-                st.warning("⚠️ La photo 'AVANT' est obligatoire selon le cahier des charges.")
-            elif securite == "NON" and type_maint != "Préventive":
-                st.error("🛑 Intervention bloquée : La consignation électrique est obligatoire pour les actions correctives/curatives.")
+        if st.form_submit_button("Envoyer au Superviseur"):
+            if photo and localisation:
+                # LOGIQUE CLOUD À ACTIVER (Exemple) :
+                # 1. Envoyer la photo dans le "Bucket" Supabase
+                # file_path = f"photos/{datetime.now().timestamp()}.jpg"
+                # supabase.storage.from_("photos").upload(file_path, photo.getvalue())
+                
+                # 2. Envoyer les données texte dans la Table "interventions"
+                # data = {"technicien": st.session_state.utilisateur, "date": str(datetime.now()), "equipement": article, "photo_url": file_path, "etat": etat}
+                # supabase.table("interventions").insert(data).execute()
+                
+                st.success("✅ Intervention envoyée et synchronisée en temps réel !")
             else:
-                # Sauvegarde dans la base de données
-                conn = sqlite3.connect(DB_NAME)
-                c = conn.cursor()
-                date_actuelle = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                c.execute('''
-                    INSERT INTO interventions 
-                    (id_intervention, date_heure, article_nom, localisation, type_maint, mesure_securite, description, etat_final)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (ticket_id, date_actuelle, article, localisation, type_maint, securite, description, etat_final))
-                conn.commit()
-                conn.close()
-                st.success(f"✅ L'intervention {ticket_id} a été enregistrée avec succès !")
+                st.error("La photo et la localisation sont obligatoires.")
 
-# --- ONGLET 2 : TABLEAU DE BORD ET HISTORIQUE ---
-elif menu == "Tableau de Bord / Historique":
-    st.header("📊 Historique des Interventions")
+# --- VUE SUPERVISEUR : CONTRÔLE ET HISTORIQUE ---
+elif st.session_state.role == "Superviseur":
+    st.header("👑 Espace Superviseur - Contrôle en Temps Réel")
     
-    # Lecture des données depuis SQLite
-    conn = sqlite3.connect(DB_NAME)
-    df = pd.read_sql_query("SELECT * FROM interventions ORDER BY date_heure DESC", conn)
-    conn.close()
+    st.info("Ici, vous voyez les interventions remonter en direct du terrain.")
     
-    if df.empty:
-        st.info("Aucune intervention enregistrée pour le moment.")
-    else:
-        # Métriques rapides
-        st.subheader("Vue d'ensemble")
-        col_m1, col_m2, col_m3 = st.columns(3)
-        col_m1.metric("Total Interventions", len(df))
-        col_m2.metric("En état 'Hors service'", len(df[df['etat_final'] == 'Hors service']))
-        col_m3.metric("Interventions Curatives", len(df[df['type_maint'] == 'Curative']))
-        
-        # Affichage du tableau de données
-        st.dataframe(df, use_container_width=True)
-        
-        # Bouton d'export CSV (Alternative rapide à l'export PDF pour un prototype)
-        st.download_button(
-            label="📥 Exporter l'historique en CSV",
-            data=df.to_csv(index=False).encode('utf-8'),
-            file_name='historique_gmao_slt.csv',
-            mime='text/csv',
-        )
+    # LOGIQUE CLOUD À ACTIVER :
+    # reponse = supabase.table("interventions").select("*").execute()
+    # df = pd.DataFrame(reponse.data)
+    
+    # Données fictives pour vous montrer le rendu
+    df_fictive = pd.DataFrame({
+        "Date": ["2026-05-12 10:30", "2026-05-12 11:15"],
+        "Technicien": ["Technicien 1 (Ali)", "Technicien 3 (Said)"],
+        "Équipement": ["Feu de signalisation", "Armoire"],
+        "Localisation": ["Avenue Hassan II", "Agdal"],
+        "État": ["Fonctionnel", "À surveiller"]
+    })
+    
+    st.dataframe(df_fictive, use_container_width=True)
+    
+    st.subheader("Détail et validation")
+    ticket_selectionne = st.selectbox("Choisir une intervention à inspecter", df_fictive["Localisation"])
+    if st.button("Voir les photos associées"):
+        st.write("*(Ici s'affichera la photo téléchargée depuis le cloud par le technicien)*")
+        st.image("https://via.placeholder.com/400x200.png?text=Photo+du+terrain", caption=f"Photo à {ticket_selectionne}")
